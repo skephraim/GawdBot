@@ -11,20 +11,11 @@ import config
 from core import llm, memory
 from tools import git_tools, code_tools, pc_control
 
-SYSTEM_PROMPT = """You are GawdBot — a self-evolving AI assistant. You are capable, direct, and helpful.
+SYSTEM_PROMPT = """You are GawdBot. Be direct and concise.
 
-You have tools for:
-- Reading and writing files (including your own source code)
-- Running shell commands
-- Git operations: commit, branch, push, create PRs
-- Persistent semantic memory: search past conversations, save important facts
-- Self-improvement: modify your own code via git branches
-
-When asked to improve yourself, read CLAUDE.md first for architecture context, then make targeted changes,
-commit to a branch, and notify the user for review (unless auto-merge is configured).
-
-Be concise. Prefer action over explanation. Ask one focused question if you're uncertain.
-"""
+Tools: files, shell, git, memory, PC control, phone control, self-improvement.
+When improving yourself: read CLAUDE.md first, change only what's needed, commit to a branch.
+Ask one question if unclear. Prefer action over explanation."""
 
 TOOLS = [
     {
@@ -613,27 +604,38 @@ async def _execute_tool(name: str, args: dict, interface: str = "chat") -> str:
         return f"Tool error ({name}): {e}"
 
 
+def _build_messages(user_message: str, memory_context: str) -> list[dict]:
+    """Build message list from history + current message."""
+    system = SYSTEM_PROMPT
+    if memory_context:
+        system += f"\n\nMemory:\n{memory_context}"
+    history = memory.get_recent_conversations()
+    msgs = [{"role": "system", "content": system}]
+    for h in history[:-1]:  # skip the message we just saved
+        msgs.append({"role": h["role"], "content": h["content"]})
+    msgs.append({"role": "user", "content": user_message})
+    return msgs
+
+
 async def chat(user_message: str, interface: str = "chat") -> str:
-    """Process a user message through the agentic loop and return a response."""
+    """
+    Process a message through the agentic tool-calling loop.
+    Uses fast CHAT_MODEL for direct replies, AGENT_MODEL when tools are invoked.
+    Memory context uses cheap keyword search — no embedding cost per message.
+    """
     memory.save_conversation("user", user_message, interface)
 
-    # Inject relevant long-term memory as context
-    relevant = await memory.search_memory(user_message)
+    # Fast keyword memory lookup (no embedding/LLM call needed)
+    kw_hits = memory.keyword_search_memory(user_message)
     memory_context = ""
-    if relevant:
-        memory_context = "\n\nRelevant memory:\n" + "\n".join(
-            f"- [{r['category']}] {r['content']}" for r in relevant
-        )
+    if kw_hits:
+        memory_context = "\n".join(f"- [{r['category']}] {r['content']}" for r in kw_hits)
 
-    history = memory.get_recent_conversations()
-    messages = [{"role": "system", "content": SYSTEM_PROMPT + memory_context}]
-    # Include history but skip the message we just saved (last item)
-    for h in history[:-1]:
-        messages.append({"role": h["role"], "content": h["content"]})
-    messages.append({"role": "user", "content": user_message})
+    messages = _build_messages(user_message, memory_context)
 
-    # Agentic loop
     for _ in range(15):
+        # use_agent_model=False for first call — fast model tries first.
+        # If it calls tools, subsequent calls automatically use agent_model via tools flag.
         msg = await llm.chat(messages, tools=TOOLS)
 
         if not msg.tool_calls:
@@ -652,4 +654,46 @@ async def chat(user_message: str, interface: str = "chat") -> str:
                 "content": result,
             })
 
-    return "Reached the action limit. Please try breaking your request into smaller steps."
+    return "Reached the action limit. Try a simpler request."
+
+
+async def stream_chat(user_message: str, interface: str = "chat") -> AsyncGenerator[str, None]:
+    """
+    Streaming version of chat for use in Telegram / voice.
+    Streams token-by-token using the fast CHAT_MODEL.
+    Falls back to non-streaming if tool calls are detected.
+    """
+    memory.save_conversation("user", user_message, interface)
+
+    kw_hits = memory.keyword_search_memory(user_message)
+    memory_context = ""
+    if kw_hits:
+        memory_context = "\n".join(f"- [{r['category']}] {r['content']}" for r in kw_hits)
+
+    messages = _build_messages(user_message, memory_context)
+
+    # Quick check: does this look like it needs tools?
+    # If yes, run the full loop and yield the final answer at once.
+    tool_keywords = (
+        "write", "create", "edit", "run", "execute", "commit", "git", "file",
+        "improve yourself", "evolve", "click", "tap", "screenshot", "search the web",
+        "open app", "remember that", "save this",
+    )
+    needs_tools = any(kw in user_message.lower() for kw in tool_keywords)
+
+    if needs_tools:
+        response = await chat.__wrapped__(user_message, interface)  # call non-streaming
+        yield response
+        return
+
+    full = ""
+    async for chunk in llm.stream_chat(messages):
+        full += chunk
+        yield chunk
+
+    memory.save_conversation("assistant", full, interface)
+
+
+# Unwrapped reference so stream_chat can call the real chat() without recursion
+import functools
+chat.__wrapped__ = chat

@@ -27,7 +27,7 @@ from telegram.ext import (
 
 import config
 from core import memory
-from core.agent import chat
+from core.agent import chat, stream_chat
 from core.self_evolve import propose_improvement
 
 # ── Authorization ─────────────────────────────────────────────────────────────
@@ -148,6 +148,46 @@ async def _cmd_memory(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await _send(update, "\n\n".join(lines))
 
 
+async def _stream_reply(update: Update, text: str) -> None:
+    """
+    Stream agent response into a live Telegram message.
+    Edits the placeholder every ~300ms to show tokens as they arrive.
+    Falls back to _send() for long responses (>4000 chars).
+    """
+    placeholder = await update.message.reply_text("…")
+    buf = ""
+    last_edit = asyncio.get_event_loop().time()
+    EDIT_INTERVAL = 0.3  # seconds between edits — avoids Telegram flood-wait
+
+    async for chunk in stream_chat(text, interface="telegram"):
+        buf += chunk
+        now = asyncio.get_event_loop().time()
+        if now - last_edit >= EDIT_INTERVAL and len(buf) <= 4000:
+            try:
+                await placeholder.edit_text(buf)
+                last_edit = now
+            except Exception:
+                pass  # edit failed (no change, flood) — ignore
+
+    if not buf:
+        await placeholder.edit_text("(no response)")
+        return
+
+    if len(buf) <= 4000:
+        # Final edit with complete text
+        try:
+            await placeholder.edit_text(buf)
+        except Exception:
+            pass
+    else:
+        # Too long for one message — delete placeholder, chunk it out
+        try:
+            await placeholder.delete()
+        except Exception:
+            pass
+        await _send(update, buf)
+
+
 async def _handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not _authorized(update.effective_user.id):
         return
@@ -158,8 +198,7 @@ async def _handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     async def _run():
         await update.message.chat.send_action("typing")
-        response = await chat(text, interface="telegram")
-        await _send(update, response)
+        await _stream_reply(update, text)
 
     await _queue.put(_run)
 
@@ -202,8 +241,7 @@ async def _handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             return
 
         await update.message.reply_text(f"_{text}_", parse_mode="Markdown")
-        response = await chat(text, interface="telegram")
-        await _send(update, response)
+        await _stream_reply(update, text)
 
     await _queue.put(_run)
 
