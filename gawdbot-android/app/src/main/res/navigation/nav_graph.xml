@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<navigation xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/nav_graph"
+    app:startDestination="@id/chatFragment">
+
+    <fragment
+        android:id="@+id/chatFragment"
+        android:name="com.gawdbot.app.ui.chat.ChatFragment"
+        android:label="Chat" />
+
+    <fragment
+        android:id="@+id/agentFragment"
+        android:name="com.gawdbot.app.ui.agent.AgentFragment"
+        android:label="Agent" />
+
+    <fragment
+        android:id="@+id/browserFragment"
+        android:name="com.gawdbot.app.ui.browser.BrowserFragment"
+        android:label="Browser" />
+
+    <fragment
+        android:id="@+id/settingsFragment"
+        android:name="com.gawdbot.app.ui.settings.SettingsFragment"
+        android:label="Settings" />
+
+</navigation>

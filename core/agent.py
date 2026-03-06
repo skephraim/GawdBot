@@ -361,14 +361,130 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "text": {"type": "string", "description": "Single text to embed"},
-                    "input_type": {
-                        "type": "string",
-                        "description": "passage (for storage) or query (for search) — default: passage",
-                    },
+                    "text": {"type": "string"},
+                    "input_type": {"type": "string", "description": "passage or query"},
                 },
                 "required": ["text"],
             },
+        },
+    },
+    # ── Phone control (Android) ───────────────────────────────────────────────
+    {
+        "type": "function",
+        "function": {
+            "name": "phone_screenshot",
+            "description": "Take a screenshot of the connected Android phone screen. Returns base64 PNG.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "analyze_phone_screen",
+            "description": "Take a screenshot and analyze it with the vision LLM to understand what's on the phone screen.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "What to look for or ask about the screen. Default: describe all UI elements and their positions.",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "phone_tap",
+            "description": "Tap at a specific coordinate on the phone screen",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "x": {"type": "integer", "description": "X coordinate in pixels"},
+                    "y": {"type": "integer", "description": "Y coordinate in pixels"},
+                },
+                "required": ["x", "y"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "phone_swipe",
+            "description": "Swipe on the phone screen",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "startX": {"type": "integer"},
+                    "startY": {"type": "integer"},
+                    "endX": {"type": "integer"},
+                    "endY": {"type": "integer"},
+                    "duration_ms": {"type": "integer", "description": "Swipe duration in ms (default 300)"},
+                },
+                "required": ["startX", "startY", "endX", "endY"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "phone_type",
+            "description": "Type text into the currently focused input on the phone",
+            "parameters": {
+                "type": "object",
+                "properties": {"text": {"type": "string"}},
+                "required": ["text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "phone_key",
+            "description": "Press a system key on the phone",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "key": {
+                        "type": "string",
+                        "description": "Key name: BACK | HOME | RECENTS | NOTIFICATIONS | VOLUME_UP | VOLUME_DOWN | POWER | ENTER",
+                    },
+                },
+                "required": ["key"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "phone_open_url",
+            "description": "Open a URL in the phone browser",
+            "parameters": {
+                "type": "object",
+                "properties": {"url": {"type": "string"}},
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "phone_web_search",
+            "description": "Perform a web search on the phone using the built-in browser",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "phone_status",
+            "description": "Check if a phone is connected and get its screen dimensions",
+            "parameters": {"type": "object", "properties": {}},
         },
     },
 ]
@@ -436,6 +552,61 @@ async def _execute_tool(name: str, args: dict, interface: str = "chat") -> str:
         elif name == "generate_embedding":
             embedding = await llm.embed(args["text"], input_type=args.get("input_type", "passage"))
             return json.dumps({"embedding": embedding, "dimensions": len(embedding)})
+        # ── Phone control ─────────────────────────────────────────────────────
+        elif name == "phone_status":
+            from interfaces.webhook_server import get_connected_phone, _phone_meta
+            conn = get_connected_phone()
+            if not conn:
+                return "No phone connected. Open the GawdBot Android app and connect."
+            device_id, _ = conn
+            meta = _phone_meta.get(device_id, {})
+            return f"Phone connected: {meta.get('name', 'Unknown')} — screen {meta.get('width')}×{meta.get('height')}px"
+        elif name == "phone_screenshot":
+            from interfaces.webhook_server import get_phone_screenshot
+            img = await get_phone_screenshot()
+            if img is None:
+                return "No phone connected or screenshot timed out."
+            return img  # base64 PNG — can be passed to analyze_phone_screen
+        elif name == "analyze_phone_screen":
+            from interfaces.webhook_server import get_phone_screenshot, _phone_meta, get_connected_phone
+            from tools.vision import analyze_image
+            img = await get_phone_screenshot()
+            if img is None:
+                return "No phone connected or screenshot timed out."
+            conn = get_connected_phone()
+            meta = _phone_meta.get(conn[0], {}) if conn else {}
+            question = args.get("question", "Describe all visible UI elements and their pixel positions so I can interact with them.")
+            return await analyze_image(img, question, meta.get("width"), meta.get("height"))
+        elif name == "phone_tap":
+            from interfaces.webhook_server import send_phone_action
+            ok = await send_phone_action("tap", {"x": args["x"], "y": args["y"]})
+            return "Tapped." if ok else "Tap failed — no phone connected."
+        elif name == "phone_swipe":
+            from interfaces.webhook_server import send_phone_action
+            ok = await send_phone_action("swipe", {
+                "startX": args["startX"], "startY": args["startY"],
+                "endX": args["endX"], "endY": args["endY"],
+                "duration_ms": args.get("duration_ms", 300),
+            })
+            return "Swipe executed." if ok else "Swipe failed — no phone connected."
+        elif name == "phone_type":
+            from interfaces.webhook_server import send_phone_action
+            ok = await send_phone_action("type", {"text": args["text"]})
+            return "Text typed." if ok else "Type failed — no phone connected."
+        elif name == "phone_key":
+            from interfaces.webhook_server import send_phone_action
+            ok = await send_phone_action("key", {"key": args["key"]})
+            return f"Key {args['key']} pressed." if ok else "Key press failed — no phone connected."
+        elif name == "phone_open_url":
+            from interfaces.webhook_server import send_phone_action
+            ok = await send_phone_action("open_url", {"url": args["url"]})
+            return f"Opening {args['url']}." if ok else "Failed — no phone connected."
+        elif name == "phone_web_search":
+            from interfaces.webhook_server import send_phone_action
+            import urllib.parse
+            url = f"https://duckduckgo.com/?q={urllib.parse.quote_plus(args['query'])}"
+            ok = await send_phone_action("open_url", {"url": url})
+            return f"Searching for '{args['query']}'." if ok else "Search failed — no phone connected."
         else:
             return f"Unknown tool: {name}"
     except Exception as e:

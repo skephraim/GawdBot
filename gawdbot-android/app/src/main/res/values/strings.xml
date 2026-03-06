@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">GawdBot</string>
+    <string name="accessibility_label">GawdBot Phone Control</string>
+    <string name="accessibility_description">Allows GawdBot to control your phone — tap, swipe, type — to automate tasks on your behalf.</string>
+</resources>
