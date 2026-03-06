@@ -1,0 +1,26 @@
+# LLM
+openai>=1.40.0
+numpy>=1.26.0
+
+# Telegram
+python-telegram-bot>=21.0.0
+
+# Voice — STT
+faster-whisper>=1.0.0
+pyaudio>=0.2.14
+
+# Voice — Wake word
+openwakeword>=0.6.0
+onnxruntime-gpu>=1.18.0  # swap for onnxruntime on CPU-only machines
+
+# Voice — TTS
+piper-tts>=1.2.0
+
+# GitHub PR creation + webhook server
+aiohttp>=3.9.0
+
+# PC control
+pyautogui>=0.9.54
+
+# Env
+python-dotenv>=1.0.0
